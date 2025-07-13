@@ -11,9 +11,8 @@ export default function ScreenCapture() {
   const [ocrResult, setOcrResult] = useState<string | null>(null);
   const [croppedImage, setCroppedImage] = useState<string | null>(null);
   const monitoringIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  // Fixed crop for bottom left 500x300
-  const cropWidth = 500;
-  const cropHeight = 300;
+  const [cropWidth, setCropWidth] = useState(200);
+  const [cropHeight, setCropHeight] = useState(40);
 
   const startShare = async () => {
     setShareError(null);
@@ -43,15 +42,12 @@ export default function ScreenCapture() {
   };
 
   // Function to send image to backend OCR endpoint
-  const sendToOcr = async (
-    imageDataUrl: string,
-    crop: { x: number; y: number; width: number; height: number }
-  ) => {
+  const sendToOcr = async (imageDataUrl: string) => {
     try {
       const response = await fetch('/api/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: imageDataUrl, crop }),
+        body: JSON.stringify({ image: imageDataUrl }),
       });
       if (response.ok) {
         const data = await response.json();
@@ -78,52 +74,88 @@ export default function ScreenCapture() {
     document.body.removeChild(link);
   };
 
-  // Function to capture frame and send to OCR (send full frame, crop in backend)
+  // Function to crop image on frontend with high quality
+  const cropImage = (fullImageDataUrl: string, cropX: number, cropY: number, cropW: number, cropH: number): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        // Increase canvas resolution for better quality
+        const scale = 2; // 2x resolution
+        canvas.width = cropW * scale;
+        canvas.height = cropH * scale;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve('');
+          return;
+        }
+        
+        // Enable high-quality image smoothing
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        
+        // Draw the cropped image at higher resolution
+        ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW * scale, cropH * scale);
+        
+        // Use high quality PNG with maximum quality
+        resolve(canvas.toDataURL('image/png', 1.0));
+      };
+      img.src = fullImageDataUrl;
+    });
+  };
+
+  // Function to capture frame and send to OCR (crop on frontend)
   const captureAndAnalyze = async () => {
     const video = videoRef.current;
     if (!video) return;
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
-    const sx = 0;
-    const sy = fullH - cropHeight;
+    const sx = fullW - cropWidth - 900; // Same as manual capture
+    const sy = fullH - cropHeight - 50; // Same as manual capture
     const canvas = document.createElement('canvas');
     canvas.width = fullW;
     canvas.height = fullH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
+    // Enable high-quality image smoothing for better capture quality
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
     ctx.drawImage(video, 0, 0, fullW, fullH);
-    const imageDataUrl = canvas.toDataURL('image/png');
-    setCapturedImage(imageDataUrl);
-    await sendToOcr(imageDataUrl, {
-      x: sx,
-      y: sy,
-      width: cropWidth,
-      height: cropHeight,
-    });
+    const fullImageDataUrl = canvas.toDataURL('image/png', 1.0);
+    setCapturedImage(fullImageDataUrl);
+    
+    // Crop the image on frontend
+    const croppedImageDataUrl = await cropImage(fullImageDataUrl, sx, sy, cropWidth, cropHeight);
+    await sendToOcr(croppedImageDataUrl);
   };
 
-  // Manual captureFrame for one-off capture (send full frame, crop in backend)
-  const captureFrame = () => {
+  // Manual captureFrame for one-off capture (crop on frontend)
+  const captureFrame = async () => {
     const video = videoRef.current;
     if (!video) return;
     const fullW = video.videoWidth;
     const fullH = video.videoHeight;
-    const sx = 0;
-    const sy = fullH - cropHeight;
+    const sx = fullW - cropWidth - 900; // Start 300px left from the right edge
+    const sy = fullH - cropHeight- 50; // Start from bottom
     const canvas = document.createElement('canvas');
     canvas.width = fullW;
     canvas.height = fullH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
+    // Enable high-quality image smoothing for better capture quality
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    
     ctx.drawImage(video, 0, 0, fullW, fullH);
-    const imageDataUrl = canvas.toDataURL('image/png');
-    setCapturedImage(imageDataUrl);
-    sendToOcr(imageDataUrl, {
-      x: sx,
-      y: sy,
-      width: cropWidth,
-      height: cropHeight,
-    });
+    const fullImageDataUrl = canvas.toDataURL('image/png', 1.0);
+    setCapturedImage(fullImageDataUrl);
+    
+    // Crop the image on frontend
+    const croppedImageDataUrl = await cropImage(fullImageDataUrl, sx, sy, cropWidth, cropHeight);
+    sendToOcr(croppedImageDataUrl);
   };
 
   // Start/stop monitoring
@@ -203,8 +235,24 @@ export default function ScreenCapture() {
                     min={1}
                     max={1920}
                     value={cropWidth}
-                    disabled
-                    className='w-20 px-2 py-1 border rounded text-xs bg-gray-100 cursor-not-allowed'
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '') {
+                        setCropWidth(0); // Allow empty value
+                      } else {
+                        const numValue = parseInt(value);
+                        if (!isNaN(numValue) && numValue > 0) {
+                          setCropWidth(numValue);
+                        }
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const value = e.target.value;
+                      if (value === '' || isNaN(parseInt(value)) || parseInt(value) <= 0) {
+                        setCropWidth(200); // Reset to default if invalid
+                      }
+                    }}
+                    className='w-20 px-2 py-1 border rounded text-xs'
                   />
                   <label className='text-xs text-gray-600'>Crop Height:</label>
                   <input
@@ -212,10 +260,26 @@ export default function ScreenCapture() {
                     min={1}
                     max={1080}
                     value={cropHeight}
-                    disabled
-                    className='w-20 px-2 py-1 border rounded text-xs bg-gray-100 cursor-not-allowed'
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '') {
+                        setCropHeight(0); // Allow empty value
+                      } else {
+                        const numValue = parseInt(value);
+                        if (!isNaN(numValue) && numValue > 0) {
+                          setCropHeight(numValue);
+                        }
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const value = e.target.value;
+                      if (value === '' || isNaN(parseInt(value)) || parseInt(value) <= 0) {
+                        setCropHeight(40); // Reset to default if invalid
+                      }
+                    }}
+                    className='w-20 px-2 py-1 border rounded text-xs'
                   />
-                  <span className='text-xs text-gray-400'>(bottom left)</span>
+                  <span className='text-xs text-gray-400'>(bottom right)</span>
                 </div>
               </>
             )}
