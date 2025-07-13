@@ -9,7 +9,11 @@ export default function ScreenCapture() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [ocrResult, setOcrResult] = useState<string | null>(null);
+  const [croppedImage, setCroppedImage] = useState<string | null>(null);
   const monitoringIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Fixed crop for bottom left 500x300
+  const cropWidth = 500;
+  const cropHeight = 300;
 
   const startShare = async () => {
     setShareError(null);
@@ -38,51 +42,88 @@ export default function ScreenCapture() {
     setIsSharing(false);
   };
 
-  const captureFrame = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    setCapturedImage(canvas.toDataURL('image/png'));
-    // You can now send this image to your OCR backend or use Tesseract.js
-  };
-
   // Function to send image to backend OCR endpoint
-  const sendToOcr = async (imageDataUrl: string) => {
+  const sendToOcr = async (
+    imageDataUrl: string,
+    crop: { x: number; y: number; width: number; height: number }
+  ) => {
     try {
       const response = await fetch('/api/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: imageDataUrl }),
+        body: JSON.stringify({ image: imageDataUrl, crop }),
       });
       if (response.ok) {
         const data = await response.json();
         setOcrResult(data.text || 'No text found');
+        setCroppedImage(data.croppedImage || null);
       } else {
         setOcrResult('OCR failed');
+        setCroppedImage(null);
       }
     } catch (err) {
       setOcrResult('OCR error');
+      setCroppedImage(null);
     }
   };
 
-  // Function to capture frame and send to OCR
+  // Download cropped image
+  const downloadCroppedImage = () => {
+    if (!croppedImage) return;
+    const link = document.createElement('a');
+    link.href = croppedImage;
+    link.download = `cropped-ocr.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Function to capture frame and send to OCR (send full frame, crop in backend)
   const captureAndAnalyze = async () => {
     const video = videoRef.current;
     if (!video) return;
+    const fullW = video.videoWidth;
+    const fullH = video.videoHeight;
+    const sx = 0;
+    const sy = fullH - cropHeight;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = fullW;
+    canvas.height = fullH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, fullW, fullH);
     const imageDataUrl = canvas.toDataURL('image/png');
     setCapturedImage(imageDataUrl);
-    await sendToOcr(imageDataUrl);
+    await sendToOcr(imageDataUrl, {
+      x: sx,
+      y: sy,
+      width: cropWidth,
+      height: cropHeight,
+    });
+  };
+
+  // Manual captureFrame for one-off capture (send full frame, crop in backend)
+  const captureFrame = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const fullW = video.videoWidth;
+    const fullH = video.videoHeight;
+    const sx = 0;
+    const sy = fullH - cropHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = fullW;
+    canvas.height = fullH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, fullW, fullH);
+    const imageDataUrl = canvas.toDataURL('image/png');
+    setCapturedImage(imageDataUrl);
+    sendToOcr(imageDataUrl, {
+      x: sx,
+      y: sy,
+      width: cropWidth,
+      height: cropHeight,
+    });
   };
 
   // Start/stop monitoring
@@ -155,23 +196,49 @@ export default function ScreenCapture() {
                   }`}>
                   {isMonitoring ? 'Stop Monitoring' : 'Start 5s Interval OCR'}
                 </button>
+                <div className='flex gap-2 mt-3 items-center'>
+                  <label className='text-xs text-gray-600'>Crop Width:</label>
+                  <input
+                    type='number'
+                    min={1}
+                    max={1920}
+                    value={cropWidth}
+                    disabled
+                    className='w-20 px-2 py-1 border rounded text-xs bg-gray-100 cursor-not-allowed'
+                  />
+                  <label className='text-xs text-gray-600'>Crop Height:</label>
+                  <input
+                    type='number'
+                    min={1}
+                    max={1080}
+                    value={cropHeight}
+                    disabled
+                    className='w-20 px-2 py-1 border rounded text-xs bg-gray-100 cursor-not-allowed'
+                  />
+                  <span className='text-xs text-gray-400'>(bottom left)</span>
+                </div>
               </>
             )}
           </div>
-          {capturedImage && (
+          {croppedImage && (
             <div>
               <div className='mb-2 text-sm text-gray-700 dark:text-gray-300'>
-                Captured Image:
+                Cropped Image (Analyzed):
               </div>
               <img
-                src={capturedImage}
-                alt='Captured'
+                src={croppedImage}
+                alt='Cropped'
                 style={{
                   width: 400,
                   borderRadius: 8,
                   border: '1px solid #ccc',
                 }}
               />
+              <button
+                onClick={downloadCroppedImage}
+                className='mt-2 px-4 py-2 rounded bg-blue-500 hover:bg-blue-600 text-white font-medium w-full'>
+                Download Cropped Image
+              </button>
             </div>
           )}
           {ocrResult && (
