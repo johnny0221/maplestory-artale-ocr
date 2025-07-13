@@ -53,11 +53,14 @@ export default function ScreenCapture() {
     height: 300,
   });
   const [showCropSettings, setShowCropSettings] = useState(false);
+  const [displays, setDisplays] = useState<any[]>([]);
+  const [selectedDisplay, setSelectedDisplay] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Load available windows on component mount
+    // Load available windows and displays on component mount
     loadAvailableWindows();
+    loadDisplays();
 
     // Cleanup on unmount
     return () => {
@@ -66,6 +69,19 @@ export default function ScreenCapture() {
       }
     };
   }, [isMonitoring]);
+
+  const loadDisplays = async () => {
+    try {
+      const response = await fetch('/api/displays');
+      if (response.ok) {
+        const { displays } = await response.json();
+        setDisplays(displays);
+        console.log('Available displays:', displays);
+      }
+    } catch (error) {
+      console.error('Failed to load displays:', error);
+    }
+  };
 
   const loadAvailableWindows = async () => {
     try {
@@ -196,6 +212,8 @@ export default function ScreenCapture() {
           body: JSON.stringify({
             windowId: selectedWindow?.id,
             cropRegion: showCropSettings ? cropRegion : null,
+            windowBounds: selectedWindow?.bounds,
+            displayId: selectedDisplay,
           }),
         });
 
@@ -263,6 +281,8 @@ export default function ScreenCapture() {
         body: JSON.stringify({
           windowId: selectedWindow?.id,
           cropRegion: showCropSettings ? cropRegion : null,
+          windowBounds: selectedWindow?.bounds,
+          displayId: selectedDisplay,
         }),
       });
 
@@ -272,6 +292,7 @@ export default function ScreenCapture() {
 
       const data = await response.json();
       setImage(data.image);
+      console.log('Capture result:', data.processing);
     } catch (error) {
       console.error('Error capturing screenshot:', error);
       alert('Failed to capture screenshot');
@@ -325,11 +346,91 @@ export default function ScreenCapture() {
     }
   };
 
+  const downloadImage = () => {
+    if (!image) {
+      alert('No image to download');
+      return;
+    }
+
+    try {
+      // Create a temporary anchor element to trigger download
+      const link = document.createElement('a');
+      link.href = image;
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const windowName = selectedWindow
+        ? selectedWindow.title.replace(/[^a-zA-Z0-9]/g, '_')
+        : 'screenshot';
+      link.download = `${windowName}_${timestamp}.png`;
+
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      console.log('Image downloaded successfully');
+    } catch (error) {
+      console.error('Error downloading image:', error);
+      alert('Failed to download image');
+    }
+  };
+
   return (
     <div className='p-4 max-w-7xl mx-auto'>
       <div className='grid grid-cols-1 xl:grid-cols-3 gap-6'>
         {/* Left Column - Window Selection & Crop Settings */}
         <div className='space-y-6'>
+          {/* Display Selection */}
+          <div>
+            <h3 className='font-semibold text-gray-700 dark:text-gray-300 mb-3'>
+              Display Selection
+            </h3>
+            <div className='space-y-2'>
+              <button
+                onClick={loadDisplays}
+                className='w-full bg-green-500 text-white px-3 py-2 rounded hover:bg-green-600 transition-colors text-sm'
+                disabled={isMonitoring}>
+                Refresh Displays
+              </button>
+
+              {displays.length > 0 && (
+                <select
+                  value={selectedDisplay}
+                  onChange={(e) => setSelectedDisplay(parseInt(e.target.value))}
+                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500'
+                  disabled={isMonitoring}>
+                  {displays.map((display, index) => (
+                    <option key={index} value={index}>
+                      Display {index + 1} ({display.width}x{display.height})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {displays.length > 0 && (
+                <div className='bg-green-50 dark:bg-green-900 p-3 rounded text-sm'>
+                  <p>
+                    <strong>Selected Display:</strong> Display{' '}
+                    {selectedDisplay + 1}
+                  </p>
+                  {displays[selectedDisplay] && (
+                    <>
+                      <p>
+                        <strong>Resolution:</strong>{' '}
+                        {displays[selectedDisplay].width}x
+                        {displays[selectedDisplay].height}
+                      </p>
+                      <p>
+                        <strong>ID:</strong> {displays[selectedDisplay].id}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Window Selection */}
           <div>
             <h3 className='font-semibold text-gray-700 dark:text-gray-300 mb-3'>
@@ -375,6 +476,31 @@ export default function ScreenCapture() {
                     <strong>Position:</strong> ({selectedWindow.bounds.x},{' '}
                     {selectedWindow.bounds.y})
                   </p>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const response = await fetch('/api/screenshot', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            windowId: selectedWindow.id,
+                            windowBounds: selectedWindow.bounds,
+                            displayId: selectedDisplay,
+                          }),
+                        });
+                        if (response.ok) {
+                          const data = await response.json();
+                          setImage(data.image);
+                          console.log('Window capture test result:', data);
+                        }
+                      } catch (error) {
+                        console.error('Test failed:', error);
+                      }
+                    }}
+                    className='mt-2 w-full bg-purple-500 text-white px-2 py-1 rounded hover:bg-purple-600 transition-colors text-xs'
+                    disabled={isMonitoring}>
+                    Test Window Capture
+                  </button>
                 </div>
               )}
             </div>
@@ -400,10 +526,30 @@ export default function ScreenCapture() {
 
             {showCropSettings && (
               <div className='space-y-3'>
+                <div className='bg-blue-50 dark:bg-blue-900 p-3 rounded-lg text-xs'>
+                  <p className='text-blue-800 dark:text-blue-200 mb-2'>
+                    <strong>Instructions:</strong>
+                  </p>
+                  <ul className='text-blue-700 dark:text-blue-300 space-y-1'>
+                    <li>
+                      • X, Y: Position relative to the selected window (0,0 =
+                      top-left of window)
+                    </li>
+                    <li>• Width, Height: Size of the region to capture</li>
+                    <li>
+                      • If no window is selected, coordinates are relative to
+                      screen
+                    </li>
+                  </ul>
+                </div>
+
                 <div className='grid grid-cols-2 gap-2'>
                   <div>
                     <label className='block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1'>
-                      X
+                      X{' '}
+                      {selectedWindow
+                        ? '(from window left)'
+                        : '(from screen left)'}
                     </label>
                     <input
                       type='number'
@@ -420,7 +566,10 @@ export default function ScreenCapture() {
                   </div>
                   <div>
                     <label className='block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1'>
-                      Y
+                      Y{' '}
+                      {selectedWindow
+                        ? '(from window top)'
+                        : '(from screen top)'}
                     </label>
                     <input
                       type='number'
@@ -470,10 +619,11 @@ export default function ScreenCapture() {
                     />
                   </div>
                 </div>
-                <div className='bg-blue-50 dark:bg-blue-900 p-2 rounded text-xs'>
-                  <p className='text-blue-800 dark:text-blue-200'>
-                    Crop region: {cropRegion.width}x{cropRegion.height} at (
-                    {cropRegion.x}, {cropRegion.y})
+                <div className='bg-green-50 dark:bg-green-900 p-2 rounded text-xs'>
+                  <p className='text-green-800 dark:text-green-200'>
+                    {selectedWindow
+                      ? `Capturing ${cropRegion.width}×${cropRegion.height} region at (${cropRegion.x}, ${cropRegion.y}) from "${selectedWindow.title}"`
+                      : `Capturing ${cropRegion.width}×${cropRegion.height} region at screen coordinates (${cropRegion.x}, ${cropRegion.y})`}
                   </p>
                 </div>
               </div>
@@ -502,12 +652,20 @@ export default function ScreenCapture() {
                   Upload
                 </button>
                 {image && (
-                  <button
-                    onClick={clearImage}
-                    className='bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors'
-                    disabled={isProcessing || isMonitoring}>
-                    Clear
-                  </button>
+                  <>
+                    <button
+                      onClick={downloadImage}
+                      className='bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition-colors'
+                      disabled={isProcessing || isMonitoring}>
+                      Download
+                    </button>
+                    <button
+                      onClick={clearImage}
+                      className='bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors'
+                      disabled={isProcessing || isMonitoring}>
+                      Clear
+                    </button>
+                  </>
                 )}
               </div>
               <input
